@@ -115,7 +115,7 @@ export const App = forwardRef((props, ref) => {
   }, []);
 
   useEffect(() => {
-    if(params.annotation_name){
+    if(params.annotation_name && (images.male.length > 0 || images.female.length > 0)){
       frappe.db.exists('Health Annotation', params.annotation_name)
       .then(exists => {
         if(exists){
@@ -143,7 +143,7 @@ export const App = forwardRef((props, ref) => {
       document.removeEventListener("keydown", handleKeyDown);
     };
 
-  }, [excalidrawAPI, annotationsTemplate]);
+  }, [excalidrawAPI, annotationsTemplate, images]);
 
   const handleSave = async () => {
     if(!params.doctype && !params.docname )
@@ -308,6 +308,13 @@ export const App = forwardRef((props, ref) => {
 
     // Load the template image and reconstruct the scene
     const canvasContainer = document.querySelector('.excalidraw__canvas');
+    if (!canvasContainer) {
+      excalidrawAPI.updateScene(annotation.data);
+      excalidrawAPI.scrollToContent();
+      excalidrawAPI.refresh();
+      setHistoryOpen(false);
+      return;
+    }
     const canvasHeight = canvasContainer.clientHeight;
     const canvasWidth = canvasContainer.clientWidth;
 
