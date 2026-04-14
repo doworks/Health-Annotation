@@ -27,6 +27,7 @@ app_license = "mit"
 # include js, css files in header of desk.html
 # app_include_css = "/assets/annotation/css/annotation.css"
 # app_include_js = "/assets/annotation/js/annotation.js"
+app_include_js = "/assets/annotation/js/annotation_button.js"
 
 # include js, css files in header of web template
 # web_include_css = "/assets/annotation/css/annotation.css"
@@ -44,6 +45,10 @@ app_license = "mit"
 
 # include js in doctype views
 # doctype_js = {"doctype" : "public/js/doctype.js"}
+doctype_js = {
+    "Patient Encounter": "public/js/patient_encounter.js",
+    "Clinical Procedure": "public/js/clinical_procedure.js"
+}
 # doctype_list_js = {"doctype" : "public/js/doctype_list.js"}
 # doctype_tree_js = {"doctype" : "public/js/doctype_tree.js"}
 # doctype_calendar_js = {"doctype" : "public/js/doctype_calendar.js"}

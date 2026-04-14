@@ -54,6 +54,8 @@ def save_annotation(docname, doctype, annotation_template, annotation_name=None,
             "annotation": health_annotation.name,
             "type": encounter_type,
         })
+        doc.flags.ignore_mandatory = True
+        doc.flags.ignore_validate_update_after_submit = True
         doc.save()
 
     # Parse the data URL to get the file type and the Base64 data
@@ -76,3 +78,43 @@ def save_annotation(docname, doctype, annotation_template, annotation_name=None,
     health_annotation.save()
 
     # return {"file_url": file_doc.file_url}
+
+
+@frappe.whitelist()
+def get_annotation_summary(doctype, docname):
+    patient = frappe.db.get_value(doctype, docname, 'patient')
+    if not patient:
+        return []
+
+    encounter_records = frappe.get_all('Patient Encounter', filters={'patient': patient}, fields=['name'])
+    procedure_records = frappe.get_all('Clinical Procedure', filters={'patient': patient}, fields=['name'])
+
+    child_records = []
+    for encounter in encounter_records:
+        child_records += frappe.get_all('Health Annotation Table', filters={'parent': encounter['name']}, fields=['annotation'])
+    for procedure in procedure_records:
+        child_records += frappe.get_all('Health Annotation Table', filters={'parent': procedure['name']}, fields=['annotation'])
+
+    if not child_records:
+        return []
+
+    annotation_names = list(set([r['annotation'] for r in child_records]))
+
+    annotations = frappe.get_all('Health Annotation',
+        filters={'name': ['in', annotation_names]},
+        fields=['name', 'annotation_template', 'image', 'creation'],
+        order_by='creation desc')
+
+    # Fetch template labels
+    template_names = list(set([a['annotation_template'] for a in annotations if a.get('annotation_template')]))
+    template_labels = {}
+    if template_names:
+        templates = frappe.get_all('Annotation Template',
+            filters={'name': ['in', template_names]},
+            fields=['name', 'label'])
+        template_labels = {t['name']: t['label'] for t in templates}
+
+    for anno in annotations:
+        anno['template_label'] = template_labels.get(anno.get('annotation_template'), '')
+
+    return annotations
