@@ -166,10 +166,10 @@ export const App = forwardRef((props, ref) => {
       mimeType: 'image/jpeg'
     });
 
-    // Create JSON directly instead of relying on clipboard
+    // Strip template image data — only save freedraw/drawing elements with customData
+    const strippedElements = elements.filter(el => el.type !== 'image');
     const jsonText = JSON.stringify({
-      elements,
-      files: excalidrawAPI.getFiles(),
+      elements: strippedElements,
     });
 
     // const url = URL.createObjectURL(blob);
@@ -268,13 +268,124 @@ export const App = forwardRef((props, ref) => {
   const importAnnotation = (annotation) => {
     if (!excalidrawAPI) return;
     
-    for (const [key, value] of Object.entries(annotation.data.files)) {
-      excalidrawAPI.addFiles([value]);
+    // Old format (has files embedded) — load directly for backward compatibility
+    if (annotation.data.files && Object.keys(annotation.data.files).length > 0) {
+      for (const [key, value] of Object.entries(annotation.data.files)) {
+        excalidrawAPI.addFiles([value]);
+      }
+      excalidrawAPI.updateScene(annotation.data);
+      excalidrawAPI.scrollToContent();
+      excalidrawAPI.refresh();
+      setHistoryOpen(false);
+      return;
     }
-    excalidrawAPI.updateScene(annotation.data);
-    excalidrawAPI.scrollToContent()
-    excalidrawAPI.refresh()
-    setHistoryOpen(false)
+
+    // New format (no files) — reconstruct template image from Annotation Template
+    const templateName = annotation.annotation_template;
+    if (!templateName) {
+      // No template — just load elements as-is
+      excalidrawAPI.updateScene(annotation.data);
+      excalidrawAPI.scrollToContent();
+      excalidrawAPI.refresh();
+      setHistoryOpen(false);
+      return;
+    }
+
+    setAnnotationsTemplate(templateName);
+
+    // Find the template in our loaded images
+    const allTemplates = [...images.male, ...images.female];
+    const template = allTemplates.find(t => t.name === templateName);
+    
+    if (!template) {
+      // Template not found, load elements only
+      excalidrawAPI.updateScene(annotation.data);
+      excalidrawAPI.scrollToContent();
+      excalidrawAPI.refresh();
+      setHistoryOpen(false);
+      return;
+    }
+
+    // Load the template image and reconstruct the scene
+    const canvasContainer = document.querySelector('.excalidraw__canvas');
+    const canvasHeight = canvasContainer.clientHeight;
+    const canvasWidth = canvasContainer.clientWidth;
+
+    const image = new Image();
+    image.src = template.image;
+    image.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = image.width;
+      canvas.height = image.height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(image, 0, 0);
+
+      const dataURL = canvas.toDataURL('image/jpeg');
+      const fileId = template.id || generateFileId(template);
+
+      excalidrawAPI.addFiles([{
+        mimeType: 'image/jpeg',
+        id: fileId,
+        dataURL: dataURL,
+        created: Date.now(),
+      }]);
+
+      const scaleFactor = canvasHeight / image.height;
+      const imageWidth = image.width * scaleFactor;
+      const imageHeight = canvasHeight;
+      const imageX = (canvasWidth - imageWidth) / 2;
+      const imageY = (canvasHeight - imageHeight) / 2;
+
+      const imageElement = {
+        type: 'image',
+        version: 1,
+        versionNonce: 123456,
+        isDeleted: false,
+        id: template.label,
+        fillStyle: 'solid',
+        strokeWidth: 2,
+        strokeStyle: 'solid',
+        roughness: 1,
+        opacity: 100,
+        angle: 0,
+        x: imageX,
+        y: imageY,
+        width: image.width,
+        height: image.height,
+        seed: 1,
+        groupIds: [],
+        dataURL: dataURL,
+        status: 'pending',
+        backgroundColor: 'transparent',
+        strokeColor: 'transparent',
+        boundElements: null,
+        customData: undefined,
+        fileId: fileId,
+        frameId: null,
+        link: null,
+        locked: true,
+        roundness: null,
+        scale: [scaleFactor, scaleFactor],
+        updated: Date.now(),
+      };
+
+      // Merge: template image element + saved freedraw elements
+      excalidrawAPI.updateScene({
+        elements: [imageElement, ...annotation.data.elements],
+        commitToHistory: true,
+      });
+      excalidrawAPI.scrollToContent();
+      excalidrawAPI.refresh();
+      setHistoryOpen(false);
+    };
+
+    image.onerror = () => {
+      // Fallback: load elements without template
+      excalidrawAPI.updateScene(annotation.data);
+      excalidrawAPI.scrollToContent();
+      excalidrawAPI.refresh();
+      setHistoryOpen(false);
+    };
   };
 
   const handleImageClick = async (img, array, gender) => {
