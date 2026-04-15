@@ -52,6 +52,7 @@ def save_annotation(docname, doctype, annotation_template, annotation_name=None,
     if annotation_name and frappe.db.exists("Health Annotation", annotation_name):
         health_annotation = frappe.get_doc('Health Annotation', annotation_name)
         health_annotation.annotation_template = annotation_template
+        health_annotation.annotation_type = annotation_type
         health_annotation.json = json_text
     else:
         health_annotation = frappe.new_doc('Health Annotation')
