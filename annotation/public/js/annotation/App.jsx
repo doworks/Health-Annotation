@@ -40,6 +40,69 @@ const formatDate = (dateString) => {
   return date.toLocaleDateString("en-US", options);
 };
 
+const hexWithAlpha = (hex, opacity) => {
+  const alpha = Math.round(Math.min(1, Math.max(0, opacity)) * 255).toString(16).padStart(2, '0');
+  return hex + alpha;
+};
+
+const createPartElements = (parts, scaleFactor, imageX, imageY, currentPartValues = {}) => {
+  return parts.map((part, idx) => {
+    let points;
+    try {
+      points = typeof part.shape_json === 'string' ? JSON.parse(part.shape_json) : part.shape_json;
+    } catch (e) { return null; }
+    if (!points || points.length < 2) return null;
+
+    const firstX = points[0][0] * scaleFactor + imageX;
+    const firstY = points[0][1] * scaleFactor + imageY;
+
+    const relativePoints = points.map(p => [
+      p[0] * scaleFactor + imageX - firstX,
+      p[1] * scaleFactor + imageY - firstY
+    ]);
+    relativePoints.push([0, 0]); // close polygon
+
+    const hasValues = currentPartValues[part.part_name] &&
+      Object.values(currentPartValues[part.part_name]).some(v => v !== '');
+    const fillOpacity = hasValues ? 0.3 : (part.opacity || 0.2);
+
+    return {
+      type: 'line',
+      version: 1,
+      versionNonce: Date.now() + idx,
+      isDeleted: false,
+      id: `part-${part.name}-${idx}`,
+      fillStyle: 'solid',
+      strokeWidth: 2,
+      strokeStyle: 'solid',
+      roughness: 0,
+      opacity: 100,
+      angle: 0,
+      x: firstX,
+      y: firstY,
+      width: Math.max(...relativePoints.map(p => p[0])) - Math.min(...relativePoints.map(p => p[0])),
+      height: Math.max(...relativePoints.map(p => p[1])) - Math.min(...relativePoints.map(p => p[1])),
+      seed: Date.now() + idx,
+      groupIds: [],
+      backgroundColor: hexWithAlpha(part.color || '#4dabf7', fillOpacity),
+      strokeColor: part.color || '#4dabf7',
+      boundElements: null,
+      customData: { partType: 'template_part', partName: part.part_name, partId: part.name },
+      frameId: null,
+      link: null,
+      locked: true,
+      roundness: null,
+      points: relativePoints,
+      lastCommittedPoint: null,
+      startBinding: null,
+      endBinding: null,
+      startArrowhead: null,
+      endArrowhead: null,
+      updated: Date.now(),
+    };
+  }).filter(Boolean);
+};
+
 export const App = forwardRef((props, ref) => {
   const [params, setParams] = useState({});
   const [index, setIndex] = useState(0);
@@ -55,6 +118,50 @@ export const App = forwardRef((props, ref) => {
   const [treatments, setTreatments] = useState([]);
   const [annotationHistory, setAnnotationHistory] = useState([]);
   const [annotationsTemplate, setAnnotationsTemplate] = useState('');
+  const [templateParts, setTemplateParts] = useState([]);
+  const [partValues, setPartValues] = useState({});
+  const [selectedPart, setSelectedPart] = useState(null);
+
+  const updatePartVisuals = (selectedPartName) => {
+    if (!excalidrawAPI) return;
+    const sceneElements = excalidrawAPI.getSceneElements().map(el => {
+      if (el.customData?.partType === 'template_part') {
+        const part = templateParts.find(p => p.part_name === el.customData.partName);
+        if (!part) return el;
+        const isSelected = el.customData.partName === selectedPartName;
+        const hasValues = partValues[el.customData.partName] &&
+          Object.values(partValues[el.customData.partName]).some(v => v !== '');
+        const fillOpacity = isSelected ? 0.5 : (hasValues ? 0.3 : (part.opacity || 0.2));
+        return {
+          ...el,
+          strokeWidth: isSelected ? 4 : 2,
+          backgroundColor: hexWithAlpha(part.color || '#4dabf7', fillOpacity),
+        };
+      }
+      return el;
+    });
+    excalidrawAPI.updateScene({ elements: sceneElements });
+  };
+
+  const resetPartVisuals = () => {
+    if (!excalidrawAPI) return;
+    const sceneElements = excalidrawAPI.getSceneElements().map(el => {
+      if (el.customData?.partType === 'template_part') {
+        const part = templateParts.find(p => p.part_name === el.customData.partName);
+        if (!part) return el;
+        const hasValues = partValues[el.customData.partName] &&
+          Object.values(partValues[el.customData.partName]).some(v => v !== '');
+        const fillOpacity = hasValues ? 0.3 : (part.opacity || 0.2);
+        return {
+          ...el,
+          strokeWidth: 2,
+          backgroundColor: hexWithAlpha(part.color || '#4dabf7', fillOpacity),
+        };
+      }
+      return el;
+    });
+    excalidrawAPI.updateScene({ elements: sceneElements });
+  };
 
   useImperativeHandle(ref, () => ({
     handleSave,
@@ -166,10 +273,23 @@ export const App = forwardRef((props, ref) => {
       mimeType: 'image/jpeg'
     });
 
-    // Strip template image data — only save freedraw/drawing elements with customData
-    const strippedElements = elements.filter(el => el.type !== 'image');
+    // Strip Base64 image data and template part polygons
+    const strippedElements = elements.map(el => {
+      if (el.type === 'image') {
+        const { dataURL, ...rest } = el;
+        return rest;
+      }
+      return el;
+    }).filter(el => !(el.customData?.partType === 'template_part'));
+
+    const hasPartValues = Object.values(partValues).some(pv =>
+      pv && Object.values(pv).some(v => v !== '')
+    );
+    const annotationType = hasPartValues ? 'Template Parts' : 'Free Drawing';
+
     const jsonText = JSON.stringify({
       elements: strippedElements,
+      partValues: partValues,
     });
 
     // const url = URL.createObjectURL(blob);
@@ -184,7 +304,8 @@ export const App = forwardRef((props, ref) => {
         annotation_name: params.annotation_name,
         annotation_template: annotationsTemplate, 
         json_text: jsonText, 
-        file_data: base64Image 
+        file_data: base64Image,
+        annotation_type: annotationType,
       },
       callback: function (response) {
         frappe.msgprint({ title: 'Saved', message: 'Annotation saved successfully!', indicator: 'green' });
@@ -238,11 +359,22 @@ export const App = forwardRef((props, ref) => {
       setVariables({...variables, [thisElement.customData.type]: thisElement.customData})
       setSelectedElement(thisElement)
       setSelectedTreatment(thisElement.customData.type)
+      setSelectedPart(null)
+    }
+    else if (thisElement && thisElement.type === 'line' && thisElement.customData?.partType === 'template_part') {
+      setSelectedPart(thisElement.customData);
+      setSelectedElement('');
+      setSelectedTreatment('');
+      updatePartVisuals(thisElement.customData.partName);
     }
     else{
       if(activeTool.type === "selection"){
         setSelectedElement('')
         setSelectedTreatment('')
+        if (selectedPart) {
+          setSelectedPart(null);
+          resetPartVisuals();
+        }
       }
     }
   };
@@ -270,6 +402,9 @@ export const App = forwardRef((props, ref) => {
     
     // Old format (has files embedded) — load directly for backward compatibility
     if (annotation.data.files && Object.keys(annotation.data.files).length > 0) {
+      setTemplateParts([]);
+      setPartValues({});
+      setSelectedPart(null);
       for (const [key, value] of Object.entries(annotation.data.files)) {
         excalidrawAPI.addFiles([value]);
       }
@@ -283,7 +418,9 @@ export const App = forwardRef((props, ref) => {
     // New format (no files) — reconstruct template image from Annotation Template
     const templateName = annotation.annotation_template;
     if (!templateName) {
-      // No template — just load elements as-is
+      setTemplateParts([]);
+      setPartValues({});
+      setSelectedPart(null);
       excalidrawAPI.updateScene(annotation.data);
       excalidrawAPI.scrollToContent();
       excalidrawAPI.refresh();
@@ -298,7 +435,6 @@ export const App = forwardRef((props, ref) => {
     const template = allTemplates.find(t => t.name === templateName);
     
     if (!template) {
-      // Template not found, load elements only
       excalidrawAPI.updateScene(annotation.data);
       excalidrawAPI.scrollToContent();
       excalidrawAPI.refresh();
@@ -306,17 +442,8 @@ export const App = forwardRef((props, ref) => {
       return;
     }
 
-    // Load the template image and reconstruct the scene
-    const canvasContainer = document.querySelector('.excalidraw__canvas');
-    if (!canvasContainer) {
-      excalidrawAPI.updateScene(annotation.data);
-      excalidrawAPI.scrollToContent();
-      excalidrawAPI.refresh();
-      setHistoryOpen(false);
-      return;
-    }
-    const canvasHeight = canvasContainer.clientHeight;
-    const canvasWidth = canvasContainer.clientWidth;
+    // Check if saved data has an image element with positioning info
+    const savedImageElement = annotation.data.elements.find(el => el.type === 'image');
 
     const image = new Image();
     image.src = template.image;
@@ -328,66 +455,125 @@ export const App = forwardRef((props, ref) => {
       ctx.drawImage(image, 0, 0);
 
       const dataURL = canvas.toDataURL('image/jpeg');
-      const fileId = template.id || generateFileId(template);
 
-      excalidrawAPI.addFiles([{
-        mimeType: 'image/jpeg',
-        id: fileId,
-        dataURL: dataURL,
-        created: Date.now(),
-      }]);
+      if (savedImageElement) {
+        // Saved image element has exact positioning — just regenerate the file data
+        const fileId = savedImageElement.fileId || template.id || generateFileId(template);
 
-      const scaleFactor = canvasHeight / image.height;
-      const imageWidth = image.width * scaleFactor;
-      const imageHeight = canvasHeight;
-      const imageX = (canvasWidth - imageWidth) / 2;
-      const imageY = (canvasHeight - imageHeight) / 2;
+        // Restore the image element and load the full scene first
+        const restoredElements = annotation.data.elements.map(el => {
+          if (el.type === 'image') {
+            return { ...el, fileId: fileId, status: 'pending' };
+          }
+          return el;
+        });
 
-      const imageElement = {
-        type: 'image',
-        version: 1,
-        versionNonce: 123456,
-        isDeleted: false,
-        id: template.label,
-        fillStyle: 'solid',
-        strokeWidth: 2,
-        strokeStyle: 'solid',
-        roughness: 1,
-        opacity: 100,
-        angle: 0,
-        x: imageX,
-        y: imageY,
-        width: image.width,
-        height: image.height,
-        seed: 1,
-        groupIds: [],
-        dataURL: dataURL,
-        status: 'pending',
-        backgroundColor: 'transparent',
-        strokeColor: 'transparent',
-        boundElements: null,
-        customData: undefined,
-        fileId: fileId,
-        frameId: null,
-        link: null,
-        locked: true,
-        roundness: null,
-        scale: [scaleFactor, scaleFactor],
-        updated: Date.now(),
-      };
+        // Reconstruct part overlays
+        const parts = template.parts || [];
+        setTemplateParts(parts);
+        const loadedPartValues = annotation.data.partValues || {};
+        setPartValues(loadedPartValues);
+        setSelectedPart(null);
 
-      // Merge: template image element + saved freedraw elements
-      excalidrawAPI.updateScene({
-        elements: [imageElement, ...annotation.data.elements],
-        commitToHistory: true,
-      });
-      excalidrawAPI.scrollToContent();
-      excalidrawAPI.refresh();
-      setHistoryOpen(false);
+        const imgScale = savedImageElement.scale ? savedImageElement.scale[0] : 1;
+        const partElements = createPartElements(parts, imgScale, savedImageElement.x, savedImageElement.y, loadedPartValues);
+
+        excalidrawAPI.updateScene({
+          elements: [...restoredElements, ...partElements],
+          commitToHistory: true,
+        });
+
+        // Then add files — elements are now in the scene so Excalidraw can cache them
+        excalidrawAPI.addFiles([{
+          mimeType: 'image/jpeg',
+          id: fileId,
+          dataURL: dataURL,
+          created: Date.now(),
+        }]);
+      } else {
+        // Old patched data (no image element) — reconstruct from canvas dimensions
+        const canvasContainer = document.querySelector('.excalidraw__canvas');
+        if (!canvasContainer) {
+          excalidrawAPI.updateScene(annotation.data);
+          excalidrawAPI.scrollToContent();
+          excalidrawAPI.refresh();
+          setHistoryOpen(false);
+          return;
+        }
+        const canvasHeight = canvasContainer.clientHeight;
+        const canvasWidth = canvasContainer.clientWidth;
+
+        const fileId = template.id || generateFileId(template);
+
+        const scaleFactor = canvasHeight / image.height;
+        const imageX = (canvasWidth - image.width * scaleFactor) / 2;
+        const imageY = (canvasHeight - canvasHeight) / 2;
+
+        const imageElement = {
+          type: 'image',
+          version: 1,
+          versionNonce: 123456,
+          isDeleted: false,
+          id: template.label,
+          fillStyle: 'solid',
+          strokeWidth: 2,
+          strokeStyle: 'solid',
+          roughness: 1,
+          opacity: 100,
+          angle: 0,
+          x: imageX,
+          y: imageY,
+          width: image.width,
+          height: image.height,
+          seed: 1,
+          groupIds: [],
+          status: 'pending',
+          backgroundColor: 'transparent',
+          strokeColor: 'transparent',
+          boundElements: null,
+          customData: undefined,
+          fileId: fileId,
+          frameId: null,
+          link: null,
+          locked: true,
+          roundness: null,
+          scale: [scaleFactor, scaleFactor],
+          updated: Date.now(),
+        };
+
+        // Reconstruct part overlays for old format
+        const oldParts = template.parts || [];
+        setTemplateParts(oldParts);
+        const oldPartValues = annotation.data.partValues || {};
+        setPartValues(oldPartValues);
+        setSelectedPart(null);
+
+        const oldPartElements = createPartElements(oldParts, scaleFactor, imageX, imageY, oldPartValues);
+
+        // Add elements to scene first
+        excalidrawAPI.updateScene({
+          elements: [imageElement, ...oldPartElements, ...annotation.data.elements],
+          commitToHistory: true,
+        });
+
+        // Then add files — elements are now in the scene so Excalidraw can cache them
+        excalidrawAPI.addFiles([{
+          mimeType: 'image/jpeg',
+          id: fileId,
+          dataURL: dataURL,
+          created: Date.now(),
+        }]);
+      }
+
+      // Delay to let Excalidraw process the added files before rendering
+      setTimeout(() => {
+        excalidrawAPI.scrollToContent();
+        excalidrawAPI.refresh();
+        setHistoryOpen(false);
+      }, 100);
     };
 
     image.onerror = () => {
-      // Fallback: load elements without template
       excalidrawAPI.updateScene(annotation.data);
       excalidrawAPI.scrollToContent();
       excalidrawAPI.refresh();
@@ -415,12 +601,6 @@ export const App = forwardRef((props, ref) => {
       let fileId = img.id;
       if (!img.id) { // Check if fileId exists
         fileId = generateFileId(img); // Generate a unique fileId
-        excalidrawAPI.addFiles([{
-          mimeType: 'image/jpeg',
-          id: fileId,
-          dataURL: dataURL,
-          created: Date.now(),
-        }]);
         if(array){
           const newArray = array.map(val => {
             if (val.image === img.image) val.id = fileId;
@@ -451,31 +631,50 @@ export const App = forwardRef((props, ref) => {
         angle: 0,
         x: imageX,
         y: imageY,
-        width: image.width, // Set width to image width
-        height: image.height, // Set height to image height
+        width: image.width,
+        height: image.height,
         seed: 1,
-        groupIds: [], // Initialize groupIds as an empty array
-        dataURL: dataURL, // Ensure the property is correctly named dataURL
-        status: 'pending', // Match the status of the successful image
-        backgroundColor: 'transparent', // Set a default background color
-        strokeColor: 'transparent', // Set a default stroke color
-        boundElements: null, // Match the boundElements property
-        customData: undefined, // Match the customData property
+        groupIds: [],
+        status: 'pending',
+        backgroundColor: 'transparent',
+        strokeColor: 'transparent',
+        boundElements: null,
+        customData: undefined,
         fileId: fileId,
-        frameId: null, // Match the frameId property
-        link: null, // Match the link property
-        locked: true, // Match the locked property
-        roundness: null, // Match the roundness property
-        scale: [scaleFactor, scaleFactor], // Set scale to fit height
-        updated: Date.now(), // Use the current timestamp for the updated property
+        frameId: null,
+        link: null,
+        locked: true,
+        roundness: null,
+        scale: [scaleFactor, scaleFactor],
+        updated: Date.now(),
       };
   
+      // Set up template parts
+      const parts = img.parts || [];
+      setTemplateParts(parts);
+      setPartValues({});
+      setSelectedPart(null);
+
+      const partElements = createPartElements(parts, scaleFactor, imageX, imageY);
+
+      // Add elements to scene first
       excalidrawAPI.updateScene({
-        elements: [imageElement],
+        elements: [imageElement, ...partElements],
         commitToHistory: true,
       });
-      excalidrawAPI.scrollToContent()
-      excalidrawAPI.refresh()
+
+      // Then add files — elements are now in the scene so Excalidraw can cache them
+      excalidrawAPI.addFiles([{
+        mimeType: 'image/jpeg',
+        id: fileId,
+        dataURL: dataURL,
+        created: Date.now(),
+      }]);
+
+      setTimeout(() => {
+        excalidrawAPI.scrollToContent();
+        excalidrawAPI.refresh();
+      }, 100);
     };
   
     image.onerror = (error) => {
@@ -521,6 +720,50 @@ export const App = forwardRef((props, ref) => {
               }}/> 
               : <></>}
             </div>
+          })}
+        </Card>}
+        {selectedPart && <Card variant='soft' sx={{ width: 260, zIndex: 10, marginTop: '40px', height: 'fit-content', position: 'absolute', right: 10, maxHeight: 'calc(100vh - 200px)', overflowY: 'auto' }}>
+          <FormLabel sx={{ fontWeight: 'bold', fontSize: '16px', mb: 1 }}>{selectedPart.partName}</FormLabel>
+          {templateParts.find(p => p.part_name === selectedPart.partName)?.variables?.map((variable, vIdx) => {
+            if (variable.type === 'Select') {
+              variable.selectOptions = (variable.options || '').split('\n').filter(Boolean).map(option => ({ label: option, value: option }));
+            }
+            const currentValue = (partValues[selectedPart.partName] || {})[variable.variable_name] || '';
+            return (
+              <div key={vIdx} style={{ marginBottom: 8 }}>
+                <FormLabel>{variable.variable_name}</FormLabel>
+                {variable.type === 'Select' ? (
+                  <Select
+                    name={variable.variable_name}
+                    isClearable
+                    value={variable.selectOptions?.find(option => option.value === currentValue) || null}
+                    onChange={(selectedOption) => {
+                      setPartValues(prev => ({
+                        ...prev,
+                        [selectedPart.partName]: {
+                          ...(prev[selectedPart.partName] || {}),
+                          [variable.variable_name]: selectedOption ? selectedOption.value : ''
+                        }
+                      }));
+                    }}
+                    options={variable.selectOptions || []}
+                  />
+                ) : variable.type === 'Data' ? (
+                  <Input
+                    value={currentValue}
+                    onChange={event => {
+                      setPartValues(prev => ({
+                        ...prev,
+                        [selectedPart.partName]: {
+                          ...(prev[selectedPart.partName] || {}),
+                          [variable.variable_name]: event.target.value
+                        }
+                      }));
+                    }}
+                  />
+                ) : null}
+              </div>
+            );
           })}
         </Card>}
         <Excalidraw
