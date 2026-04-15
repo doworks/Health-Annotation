@@ -8,6 +8,17 @@ def annotations_records():
     treatments = frappe.db.get_list('Annotation Treatment', fields= ['treatment', 'name', 'color'])
     for treatment in treatments:
         treatment.variables = frappe.db.get_all('Treatment Variables Table', fields=['variable_name', 'type', 'options'], filters={'parent': treatment.name})
+
+    for template in templates:
+        parts = frappe.get_all('Annotation Template Part',
+            filters={'template': template.name},
+            fields=['name', 'part_name', 'shape_json', 'color', 'opacity'])
+        for part in parts:
+            part.variables = frappe.get_all('Template Part Variable',
+                filters={'parent': part.name},
+                fields=['variable_name', 'type', 'options'])
+        template.parts = parts
+
     return {'templates': templates, 'treatments': treatments}
 
 @frappe.whitelist()
@@ -38,10 +49,9 @@ def save_annotation(docname, doctype, annotation_template, annotation_name=None,
         frappe.throw("File data is missing")
 
     if annotation_name and frappe.db.exists("Health Annotation", annotation_name):
-        health_annotation = frappe.new_doc('Health Annotation')
+        health_annotation = frappe.get_doc('Health Annotation', annotation_name)
         health_annotation.annotation_template = annotation_template
         health_annotation.json = json_text
-        # health_annotation.save()
     else:
         health_annotation = frappe.new_doc('Health Annotation')
         health_annotation.annotation_type = annotation_type
