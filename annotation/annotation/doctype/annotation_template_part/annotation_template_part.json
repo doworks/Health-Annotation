@@ -1,0 +1,85 @@
+{
+  "actions": [],
+  "autoname": "hash",
+  "creation": "2026-04-15 00:00:00.000000",
+  "doctype": "DocType",
+  "engine": "InnoDB",
+  "field_order": [
+    "template",
+    "part_name",
+    "shape_json",
+    "color",
+    "opacity",
+    "variables"
+  ],
+  "fields": [
+    {
+      "fieldname": "template",
+      "fieldtype": "Link",
+      "label": "Template",
+      "options": "Annotation Template",
+      "reqd": 1,
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "part_name",
+      "fieldtype": "Data",
+      "label": "Part Name",
+      "reqd": 1,
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "shape_json",
+      "fieldtype": "Code",
+      "label": "Shape JSON",
+      "options": "JSON",
+      "reqd": 1
+    },
+    {
+      "fieldname": "color",
+      "fieldtype": "Color",
+      "label": "Color",
+      "default": "#4dabf7"
+    },
+    {
+      "fieldname": "opacity",
+      "fieldtype": "Float",
+      "label": "Opacity",
+      "default": "0.2"
+    },
+    {
+      "fieldname": "variables",
+      "fieldtype": "Table",
+      "label": "Variables",
+      "options": "Template Part Variable"
+    }
+  ],
+  "index_web_pages_for_search": 0,
+  "links": [],
+  "modified": "2026-04-15 00:00:00.000000",
+  "modified_by": "Administrator",
+  "module": "Annotation",
+  "name": "Annotation Template Part",
+  "naming_rule": "Random",
+  "owner": "Administrator",
+  "permissions": [
+    {
+      "create": 1,
+      "delete": 1,
+      "email": 1,
+      "export": 1,
+      "print": 1,
+      "read": 1,
+      "report": 1,
+      "role": "System Manager",
+      "share": 1,
+      "write": 1
+    },
+    {
+      "read": 1,
+      "role": "All"
+    }
+  ],
+  "sort_field": "creation",
+  "sort_order": "DESC"
+}
