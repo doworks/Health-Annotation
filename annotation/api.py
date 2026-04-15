@@ -1,4 +1,5 @@
 import frappe
+import json
 import base64
 from frappe.utils.file_manager import save_file
 
@@ -128,3 +129,81 @@ def get_annotation_summary(doctype, docname):
         anno['template_label'] = template_labels.get(anno.get('annotation_template'), '')
 
     return annotations
+
+
+@frappe.whitelist()
+def save_template_parts(template, parts):
+    """Save/update template parts for an annotation template.
+
+    Args:
+        template: Name of the Annotation Template
+        parts: JSON string - array of part objects with:
+            - name (optional, for updates)
+            - part_name
+            - shape_json
+            - color
+            - opacity
+            - variables: array of {variable_name, type, options}
+    """
+    if not frappe.db.exists("Annotation Template", template):
+        frappe.throw(f"Annotation Template '{template}' does not exist")
+
+    if isinstance(parts, str):
+        parts = json.loads(parts)
+
+    if not isinstance(parts, list):
+        frappe.throw("parts must be an array of part objects")
+
+    # Collect incoming part names (for existing parts being updated)
+    incoming_names = {p["name"] for p in parts if p.get("name")}
+
+    # Delete parts for this template that are not in the incoming list
+    existing_parts = frappe.get_all("Annotation Template Part",
+        filters={"template": template},
+        fields=["name"])
+    for existing in existing_parts:
+        if existing.name not in incoming_names:
+            frappe.delete_doc("Annotation Template Part", existing.name)
+
+    saved_parts = []
+    for part_data in parts:
+        if part_data.get("name") and frappe.db.exists("Annotation Template Part", part_data["name"]):
+            doc = frappe.get_doc("Annotation Template Part", part_data["name"])
+        else:
+            doc = frappe.new_doc("Annotation Template Part")
+            doc.template = template
+
+        doc.part_name = part_data.get("part_name")
+        doc.shape_json = part_data.get("shape_json") if isinstance(part_data.get("shape_json"), str) else json.dumps(part_data.get("shape_json"))
+        doc.color = part_data.get("color", "#4dabf7")
+        doc.opacity = part_data.get("opacity", 0.2)
+
+        # Replace variables child table
+        doc.variables = []
+        for var in part_data.get("variables", []):
+            doc.append("variables", {
+                "variable_name": var.get("variable_name"),
+                "type": var.get("type"),
+                "options": var.get("options"),
+            })
+
+        doc.save()
+        saved_parts.append(doc.name)
+
+    # Return the saved parts with full data
+    result = []
+    for part_name in saved_parts:
+        part = frappe.get_doc("Annotation Template Part", part_name)
+        result.append({
+            "name": part.name,
+            "part_name": part.part_name,
+            "shape_json": part.shape_json,
+            "color": part.color,
+            "opacity": part.opacity,
+            "variables": [
+                {"variable_name": v.variable_name, "type": v.type, "options": v.options}
+                for v in part.variables
+            ],
+        })
+
+    return result
