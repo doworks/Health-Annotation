@@ -5,3 +5,16 @@
 tags
 node_modules
 __pycache__
+
+# Build output
+dist/
+
+# PRDs and planning
+PRD-*.md
+.planning/
+
+# Lock files
+package-lock.json
+
+# Root package.json (workspace-level)
+/package.json

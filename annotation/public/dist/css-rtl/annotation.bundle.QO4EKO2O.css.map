@@ -1,7 +1,0 @@
-{
-  "version": 3,
-  "sources": ["../../../../../../../../../var/folders/vd/k9kj76455wj6r0y1wll36_580000gn/T/tmp-42821-ZYkjhUtzCbJM/annotation/annotation/public/css/annotation.bundle.css"],
-  "sourcesContent": ["\n.excalidraw .drawings-sidebar {\n\tborder: 0 !important;\n}\n.excalidraw [title=\"Library\"], .layer-ui__wrapper__footer-right, .dropdown-menu-button{\n\tdisplay: none !important;\n}\n.excalidraw-wrapper .App-menu_top__left,.layer-ui__wrapper__footer-left{\n\tpadding-right: 0\n}\n.excalidraw-wrapper .shapes-section{\n\tpadding-right: 295px\n}\n.excalidraw-wrapper.leftdrawer-open .App-menu_top__left{\n\tpadding-right: 240px\n}\n.excalidraw-wrapper .layer-ui__wrapper__footer .footer-center{\n\tjustify-content: center;\n}\n/* .excalidraw-wrapper.leftdrawer-open .layer-ui__wrapper__footer-left{\n\tpadding-left: 240px\n} */\n\n.v-overlay__content{\n\toverflow-x: hidden;\n}"],
-  "mappings": ";AACA;AACC;AAAA;AAED;AAAA;AAAA;AACC;AAAA;AAED;AAAA;AACC;AAAA;AAED;AACC;AAAA;AAED;AACC;AAAA;AAED;AACC;AAAA;AAMD;AACC;AAAA;",
-  "names": []
-}
