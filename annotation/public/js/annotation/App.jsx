@@ -1,4 +1,4 @@
-import React, { useState, useEffect, forwardRef, useImperativeHandle } from 'react';
+import React, { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
 import { Excalidraw, Sidebar, Footer, exportToBlob } from '@excalidraw/excalidraw';
 
 import { 
@@ -45,7 +45,9 @@ const hexWithAlpha = (hex, opacity) => {
   return hex + alpha;
 };
 
-const createPartElements = (parts, scaleFactor, imageX, imageY, currentPartValues = {}) => {
+const createPartElements = (parts, scaleFactor, imageX, imageY, imageWidth, imageHeight, currentPartValues = {}) => {
+  const renderedWidth = imageWidth * scaleFactor;
+  const renderedHeight = imageHeight * scaleFactor;
   return parts.map((part, idx) => {
     let points;
     try {
@@ -53,18 +55,19 @@ const createPartElements = (parts, scaleFactor, imageX, imageY, currentPartValue
     } catch (e) { return null; }
     if (!points || points.length < 2) return null;
 
-    const firstX = points[0][0] * scaleFactor + imageX;
-    const firstY = points[0][1] * scaleFactor + imageY;
+    const firstX = points[0][0] * renderedWidth + imageX;
+    const firstY = points[0][1] * renderedHeight + imageY;
 
     const relativePoints = points.map(p => [
-      p[0] * scaleFactor + imageX - firstX,
-      p[1] * scaleFactor + imageY - firstY
+      p[0] * renderedWidth + imageX - firstX,
+      p[1] * renderedHeight + imageY - firstY
     ]);
     relativePoints.push([0, 0]); // close polygon
 
     const hasValues = currentPartValues[part.part_name] &&
       Object.values(currentPartValues[part.part_name]).some(v => v !== '');
-    const fillOpacity = hasValues ? 0.3 : (part.opacity || 0.2);
+    const fillOpacity = hasValues ? 0.35 : 0.08;
+    const strokeOpacity = hasValues ? 'ff' : '99';
 
     return {
       type: 'line',
@@ -73,8 +76,8 @@ const createPartElements = (parts, scaleFactor, imageX, imageY, currentPartValue
       isDeleted: false,
       id: `part-${part.name}-${idx}`,
       fillStyle: 'solid',
-      strokeWidth: 2,
-      strokeStyle: 'solid',
+      strokeWidth: hasValues ? 2 : 1,
+      strokeStyle: hasValues ? 'solid' : 'dashed',
       roughness: 0,
       opacity: 100,
       angle: 0,
@@ -85,7 +88,7 @@ const createPartElements = (parts, scaleFactor, imageX, imageY, currentPartValue
       seed: Date.now() + idx,
       groupIds: [],
       backgroundColor: hexWithAlpha(part.color || '#4dabf7', fillOpacity),
-      strokeColor: part.color || '#4dabf7',
+      strokeColor: (part.color || '#4dabf7') + strokeOpacity,
       boundElements: null,
       customData: { partType: 'template_part', partName: part.part_name, partId: part.name },
       frameId: null,
@@ -101,6 +104,237 @@ const createPartElements = (parts, scaleFactor, imageX, imageY, currentPartValue
       updated: Date.now(),
     };
   }).filter(Boolean);
+};
+
+const collectBadgeItems = (elements, partValues, templateParts, treatments) => {
+  const items = [];
+
+  // Scan freedraw elements with non-empty customData values
+  elements.forEach(el => {
+    if (el.type !== 'freedraw' || el.isDeleted || !el.customData) return;
+    const { type, ...params } = el.customData;
+    if (!type) return;
+    const hasValues = Object.values(params).some(v => v !== '' && v !== undefined && v !== null);
+    if (!hasValues) return;
+
+    let centroidX = el.x;
+    let centroidY = el.y;
+    let minY = el.y;
+    if (el.points && el.points.length > 0) {
+      const avgX = el.points.reduce((sum, p) => sum + p[0], 0) / el.points.length;
+      const avgY = el.points.reduce((sum, p) => sum + p[1], 0) / el.points.length;
+      centroidX = el.x + avgX;
+      centroidY = el.y + avgY;
+      minY = el.y + Math.min(...el.points.map(p => p[1]));
+    }
+
+    const treatment = treatments.find(t => t.treatment === type);
+    items.push({
+      type: 'Treatment',
+      name: type,
+      color: treatment?.color || '#ff6b6b',
+      params,
+      centroidX,
+      centroidY,
+      topY: minY,
+      boundsW: el.width || 0,
+    });
+  });
+
+  // Scan template parts with non-empty values
+  Object.entries(partValues).forEach(([partName, values]) => {
+    if (!values) return;
+    const hasValues = Object.values(values).some(v => v !== '' && v !== undefined && v !== null);
+    if (!hasValues) return;
+
+    const part = templateParts.find(p => p.part_name === partName);
+    const partEl = elements.find(el =>
+      el.customData?.partType === 'template_part' && el.customData.partName === partName && !el.isDeleted
+    );
+
+    let centroidX = 0;
+    let centroidY = 0;
+    let minY = 0;
+    if (partEl) {
+      if (partEl.points && partEl.points.length > 0) {
+        const avgX = partEl.points.reduce((sum, p) => sum + p[0], 0) / partEl.points.length;
+        const avgY = partEl.points.reduce((sum, p) => sum + p[1], 0) / partEl.points.length;
+        centroidX = partEl.x + avgX;
+        centroidY = partEl.y + avgY;
+        minY = partEl.y + Math.min(...partEl.points.map(p => p[1]));
+      } else {
+        centroidX = partEl.x + (partEl.width || 0) / 2;
+        centroidY = partEl.y + (partEl.height || 0) / 2;
+        minY = partEl.y;
+      }
+    }
+
+    items.push({
+      type: 'Area',
+      name: partName,
+      color: part?.color || '#4dabf7',
+      params: values,
+      centroidX,
+      centroidY,
+      topY: minY,
+      boundsW: partEl?.width || 0,
+    });
+  });
+
+  // Sort by Y then X, assign badge numbers
+  items.sort((a, b) => a.centroidY - b.centroidY || a.centroidX - b.centroidX);
+  return items.map((item, idx) => ({ ...item, badgeNum: idx + 1 }));
+};
+
+const getContrastText = (hexColor) => {
+  const hex = (hexColor || '#000000').replace('#', '');
+  const r = parseInt(hex.substring(0, 2), 16);
+  const g = parseInt(hex.substring(2, 4), 16);
+  const b = parseInt(hex.substring(4, 6), 16);
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return luminance < 0.5 ? '#ffffff' : '#333333';
+};
+
+const generateAnnotationDataHTML = (badgeItems) => {
+  if (!badgeItems || badgeItems.length === 0) return '';
+
+  const rows = badgeItems.map(item => {
+    const contrastText = getContrastText(item.color);
+    const paramsStr = Object.entries(item.params)
+      .filter(([, v]) => v !== '' && v !== undefined && v !== null)
+      .map(([k, v]) => `<b>${k}</b>: ${v}`)
+      .join(', ');
+    return `<tr style="border-bottom:1px solid #eee;">
+      <td style="padding:6px 10px;"><span style="display:inline-block;width:22px;height:22px;border-radius:50%;background:${item.color};color:${contrastText};text-align:center;line-height:22px;font-weight:bold;font-size:11px;">${item.badgeNum}</span></td>
+      <td style="padding:6px 10px;">${item.type}</td>
+      <td style="padding:6px 10px;font-weight:500;">${item.name}</td>
+      <td style="padding:6px 10px;">${paramsStr}</td>
+    </tr>`;
+  }).join('\n    ');
+
+  return `<table style="width:100%;border-collapse:collapse;font-family:sans-serif;font-size:13px;">
+  <thead>
+    <tr style="background:#f5f5f5;border-bottom:2px solid #ddd;">
+      <th style="padding:6px 10px;text-align:left;width:40px;">#</th>
+      <th style="padding:6px 10px;text-align:left;width:80px;">Type</th>
+      <th style="padding:6px 10px;text-align:left;">Name</th>
+      <th style="padding:6px 10px;text-align:left;">Parameters</th>
+    </tr>
+  </thead>
+  <tbody>
+    ${rows}
+  </tbody>
+</table>`;
+};
+
+const addBadgeLabelsToScene = (excalidrawAPI, badgeItems) => {
+  if (!badgeItems.length) return [];
+  const elements = excalidrawAPI.getSceneElements();
+  const newElements = [];
+
+  badgeItems.forEach(item => {
+    const fullLabel = `${item.badgeNum}. ${item.name}`;
+    const fullTextWidth = fullLabel.length * 8;
+    const fullRectWidth = fullTextWidth + 12;
+    // Use just the number if full label is wider than the element bounds
+    const useShort = item.boundsW > 0 && fullRectWidth > item.boundsW;
+    const label = useShort ? `${item.badgeNum}` : fullLabel;
+    const textWidth = label.length * 8;
+    const rectWidth = useShort ? 24 : fullTextWidth + 12;
+    const rectHeight = useShort ? 24 : 22;
+    const contrastText = getContrastText(item.color);
+    const ts = Date.now();
+
+    // Position above the element's true top edge, centered horizontally
+    const badgeX = item.centroidX - rectWidth / 2;
+    const badgeY = item.topY - rectHeight - 6;
+
+    const rect = {
+      type: 'rectangle',
+      version: 1,
+      versionNonce: ts + item.badgeNum * 2,
+      isDeleted: false,
+      id: `_badge-rect-${item.badgeNum}-${ts}`,
+      fillStyle: 'solid',
+      strokeWidth: 0,
+      strokeStyle: 'solid',
+      roughness: 0,
+      opacity: 90,
+      angle: 0,
+      x: badgeX,
+      y: badgeY,
+      width: rectWidth,
+      height: rectHeight,
+      seed: ts + item.badgeNum * 2,
+      groupIds: [],
+      backgroundColor: item.color,
+      strokeColor: 'transparent',
+      boundElements: null,
+      customData: { _badge: true },
+      frameId: null,
+      link: null,
+      locked: true,
+      roundness: useShort ? { type: 3 } : { type: 3 },
+      updated: ts,
+    };
+
+    const text = {
+      type: 'text',
+      version: 1,
+      versionNonce: ts + item.badgeNum * 2 + 1,
+      isDeleted: false,
+      id: `_badge-text-${item.badgeNum}-${ts}`,
+      fillStyle: 'solid',
+      strokeWidth: 1,
+      strokeStyle: 'solid',
+      roughness: 0,
+      opacity: 100,
+      angle: 0,
+      x: useShort ? badgeX + (rectWidth - textWidth) / 2 : badgeX + 6,
+      y: badgeY + (useShort ? 3 : 2),
+      width: textWidth,
+      height: 18,
+      seed: ts + item.badgeNum * 2 + 1,
+      groupIds: [],
+      backgroundColor: 'transparent',
+      strokeColor: contrastText,
+      boundElements: null,
+      customData: { _badge: true },
+      frameId: null,
+      link: null,
+      locked: true,
+      roundness: null,
+      text: label,
+      fontSize: 14,
+      fontFamily: 1,
+      textAlign: useShort ? 'center' : 'left',
+      verticalAlign: 'top',
+      baseline: 14,
+      containerId: null,
+      originalText: label,
+      autoResize: true,
+      lineHeight: 1.25,
+      updated: ts,
+    };
+
+    newElements.push(rect, text);
+  });
+
+  excalidrawAPI.updateScene({
+    elements: [...elements, ...newElements],
+  });
+
+  return newElements.map(el => el.id);
+};
+
+const removeBadgeLabels = (excalidrawAPI) => {
+  const elements = excalidrawAPI.getSceneElements().map(el => {
+    if (el.customData?._badge) {
+      return { ...el, isDeleted: true };
+    }
+    return el;
+  });
+  excalidrawAPI.updateScene({ elements });
 };
 
 export const App = forwardRef((props, ref) => {
@@ -121,22 +355,41 @@ export const App = forwardRef((props, ref) => {
   const [templateParts, setTemplateParts] = useState([]);
   const [partValues, setPartValues] = useState({});
   const [selectedPart, setSelectedPart] = useState(null);
+  const [partsVisible, setPartsVisible] = useState(true);
+  const partElementSnapshotsRef = useRef({});  // id -> { x, y, points, width, height, angle }
+
+  const storePartSnapshots = (elements) => {
+    elements.forEach(el => {
+      if (el.customData?.partType === 'template_part') {
+        partElementSnapshotsRef.current[el.id] = {
+          x: el.x, y: el.y, points: el.points,
+          width: el.width, height: el.height, angle: el.angle,
+        };
+      }
+    });
+  };
+
+  const getPartStyle = (partName, isSelected) => {
+    const part = templateParts.find(p => p.part_name === partName);
+    const color = part?.color || '#4dabf7';
+    const hasValues = partValues[partName] &&
+      Object.values(partValues[partName]).some(v => v !== '');
+    if (isSelected) {
+      return { strokeWidth: 3, strokeStyle: 'solid', backgroundColor: hexWithAlpha(color, 0.45), strokeColor: color, opacity: 100 };
+    }
+    if (hasValues) {
+      return { strokeWidth: 2, strokeStyle: 'solid', backgroundColor: hexWithAlpha(color, 0.35), strokeColor: color, opacity: 100 };
+    }
+    return { strokeWidth: 1, strokeStyle: 'dashed', backgroundColor: hexWithAlpha(color, 0.08), strokeColor: color + '99', opacity: 100 };
+  };
 
   const updatePartVisuals = (selectedPartName) => {
     if (!excalidrawAPI) return;
     const sceneElements = excalidrawAPI.getSceneElements().map(el => {
       if (el.customData?.partType === 'template_part') {
-        const part = templateParts.find(p => p.part_name === el.customData.partName);
-        if (!part) return el;
         const isSelected = el.customData.partName === selectedPartName;
-        const hasValues = partValues[el.customData.partName] &&
-          Object.values(partValues[el.customData.partName]).some(v => v !== '');
-        const fillOpacity = isSelected ? 0.5 : (hasValues ? 0.3 : (part.opacity || 0.2));
-        return {
-          ...el,
-          strokeWidth: isSelected ? 4 : 2,
-          backgroundColor: hexWithAlpha(part.color || '#4dabf7', fillOpacity),
-        };
+        const snap = partElementSnapshotsRef.current[el.id];
+        return { ...el, ...getPartStyle(el.customData.partName, isSelected), ...(snap || {}) };
       }
       return el;
     });
@@ -147,16 +400,8 @@ export const App = forwardRef((props, ref) => {
     if (!excalidrawAPI) return;
     const sceneElements = excalidrawAPI.getSceneElements().map(el => {
       if (el.customData?.partType === 'template_part') {
-        const part = templateParts.find(p => p.part_name === el.customData.partName);
-        if (!part) return el;
-        const hasValues = partValues[el.customData.partName] &&
-          Object.values(partValues[el.customData.partName]).some(v => v !== '');
-        const fillOpacity = hasValues ? 0.3 : (part.opacity || 0.2);
-        return {
-          ...el,
-          strokeWidth: 2,
-          backgroundColor: hexWithAlpha(part.color || '#4dabf7', fillOpacity),
-        };
+        const snap = partElementSnapshotsRef.current[el.id];
+        return { ...el, ...getPartStyle(el.customData.partName, false), ...(snap || {}) };
       }
       return el;
     });
@@ -253,34 +498,73 @@ export const App = forwardRef((props, ref) => {
   }, [excalidrawAPI, annotationsTemplate, images]);
 
   const handleSave = async () => {
-    if(!params.doctype && !params.docname )
+    if (!params.doctype && !params.docname) return;
     if (!excalidrawAPI) {
-      frappe.throw("Excalidraw API not available!")
-      return
+      frappe.throw("Excalidraw API not available!");
+      return;
     }
-
     const elements = excalidrawAPI.getSceneElements();
     if (!elements || !elements.length) {
       frappe.throw("Excalidraw Elements not available!");
       return;
     }
 
-    // Export as Blob
+    // Collect badge items
+    const badgeItems = collectBadgeItems(elements, partValues, templateParts, treatments);
+    const hasAnyData = badgeItems.length > 0;
+
+    const dialog = new frappe.ui.Dialog({
+      title: 'Save Annotation',
+      fields: [
+        ...(hasAnyData ? [] : [{
+          fieldtype: 'HTML',
+          options: '<div style="color:#d68a00;margin-bottom:10px;"><strong>\u26A0 No annotation parameters filled.</strong> The annotation will be saved without data.</div>'
+        }]),
+        {
+          fieldname: 'include_badges',
+          fieldtype: 'Check',
+          label: 'Include badges on image',
+          default: 1,
+          hidden: !hasAnyData,
+        }
+      ],
+      primary_action_label: 'Save',
+      primary_action: async (values) => {
+        dialog.hide();
+        await executeSave(elements, badgeItems, values.include_badges && hasAnyData);
+      }
+    });
+    dialog.show();
+  };
+
+  const executeSave = async (elements, badgeItems, includeBadges) => {
+    // Add badge labels to scene before export
+    if (includeBadges) {
+      addBadgeLabelsToScene(excalidrawAPI, badgeItems);
+    }
+
+    // Export as Blob (now includes badges if added)
     const blob = await exportToBlob({
-      elements,
+      elements: excalidrawAPI.getSceneElements(),
       appState: excalidrawAPI.getAppState(),
       files: excalidrawAPI.getFiles(),
       mimeType: 'image/jpeg'
     });
 
-    // Strip Base64 image data and template part polygons
+    // Remove badge labels immediately after export
+    if (includeBadges) {
+      removeBadgeLabels(excalidrawAPI);
+    }
+
+    // Strip Base64 image data, template part polygons, and badge elements
     const strippedElements = elements.map(el => {
       if (el.type === 'image') {
         const { dataURL, ...rest } = el;
         return rest;
       }
       return el;
-    }).filter(el => !(el.customData?.partType === 'template_part'));
+    }).filter(el => !(el.customData?.partType === 'template_part'))
+      .filter(el => !(el.customData?._badge));
 
     const hasPartValues = Object.values(partValues).some(pv =>
       pv && Object.values(pv).some(v => v !== '')
@@ -292,26 +576,28 @@ export const App = forwardRef((props, ref) => {
       partValues: partValues,
     });
 
-    // const url = URL.createObjectURL(blob);
-
     const base64Image = await convertBlobToBase64(blob);
+
+    // Generate HTML data table
+    const annotationData = generateAnnotationDataHTML(badgeItems);
 
     frappe.call({
       method: "annotation.api.save_annotation",
-      args: { 
-        doctype: params.doctype, 
-        docname: params.docname, 
+      args: {
+        doctype: params.doctype,
+        docname: params.docname,
         annotation_name: params.annotation_name,
-        annotation_template: annotationsTemplate, 
-        json_text: jsonText, 
+        annotation_template: annotationsTemplate,
+        json_text: jsonText,
         file_data: base64Image,
         annotation_type: annotationType,
+        annotation_data: annotationData,
       },
       callback: function (response) {
         frappe.msgprint({ title: 'Saved', message: 'Annotation saved successfully!', indicator: 'green' });
         setTimeout(() => {
           window.location.href = frappe.utils.get_form_link(params.doctype, params.docname);
-      }, 1000);
+        }, 1000);
       },
     });
   };
@@ -337,11 +623,6 @@ export const App = forwardRef((props, ref) => {
     const cursorButton = appState.cursorButton
     if(treatmentSidebar && selectedTreatment && appState.activeTool.type !== 'freedraw' && appState.activeTool.type !== 'selection' && !selectedElement){
       setSelectedTreatment('')
-      // console.log('hi')
-      // excalidrawAPI.updateScene({
-      //   ...appState,
-      //   currentItemStrokeColor: '#1e1e1e',
-      // })
       excalidrawAPI.toggleSidebar({name: 'drawings'})
     }
     if (newElements && newElements.type === 'freedraw') {
@@ -353,6 +634,32 @@ export const App = forwardRef((props, ref) => {
     }
   };
 
+  // Point-in-polygon test for locked part elements
+  const findPartAtPoint = (sceneX, sceneY) => {
+    if (!excalidrawAPI) return null;
+    const elements = excalidrawAPI.getSceneElements();
+    // Iterate in reverse so topmost element wins
+    for (let i = elements.length - 1; i >= 0; i--) {
+      const el = elements[i];
+      if (el.isDeleted || el.customData?.partType !== 'template_part') continue;
+      // Convert scene coords to element-local coords and run ray-casting
+      const pts = el.points;
+      if (!pts || pts.length < 3) continue;
+      const localX = sceneX - el.x;
+      const localY = sceneY - el.y;
+      let inside = false;
+      for (let a = 0, b = pts.length - 1; a < pts.length; b = a++) {
+        const [ax, ay] = pts[a];
+        const [bx, by] = pts[b];
+        if ((ay > localY) !== (by > localY) && localX < (bx - ax) * (localY - ay) / (by - ay) + ax) {
+          inside = !inside;
+        }
+      }
+      if (inside) return el.customData;
+    }
+    return null;
+  };
+
   const handleExcaliPointerDown = (activeTool, pointerDownState) => {
     const thisElement = pointerDownState.hit.element;
     if (thisElement && thisElement.type === 'freedraw') {
@@ -361,16 +668,18 @@ export const App = forwardRef((props, ref) => {
       setSelectedTreatment(thisElement.customData.type)
       setSelectedPart(null)
     }
-    else if (thisElement && thisElement.type === 'line' && thisElement.customData?.partType === 'template_part') {
-      setSelectedPart(thisElement.customData);
-      setSelectedElement('');
-      setSelectedTreatment('');
-      updatePartVisuals(thisElement.customData.partName);
-    }
-    else{
-      if(activeTool.type === "selection"){
-        setSelectedElement('')
-        setSelectedTreatment('')
+    else {
+      // Check if click hit a locked part polygon (only when visible)
+      const origin = pointerDownState.origin;
+      const hitPart = partsVisible ? findPartAtPoint(origin.x, origin.y) : null;
+      if (hitPart) {
+        setSelectedPart(hitPart);
+        setSelectedElement('');
+        setSelectedTreatment('');
+        updatePartVisuals(hitPart.partName);
+      } else if (activeTool.type === 'selection') {
+        setSelectedElement('');
+        setSelectedTreatment('');
         if (selectedPart) {
           setSelectedPart(null);
           resetPartVisuals();
@@ -476,7 +785,8 @@ export const App = forwardRef((props, ref) => {
         setSelectedPart(null);
 
         const imgScale = savedImageElement.scale ? savedImageElement.scale[0] : 1;
-        const partElements = createPartElements(parts, imgScale, savedImageElement.x, savedImageElement.y, loadedPartValues);
+        const partElements = createPartElements(parts, imgScale, savedImageElement.x, savedImageElement.y, savedImageElement.width, savedImageElement.height, loadedPartValues);
+        storePartSnapshots(partElements);
 
         excalidrawAPI.updateScene({
           elements: [...restoredElements, ...partElements],
@@ -523,8 +833,8 @@ export const App = forwardRef((props, ref) => {
           angle: 0,
           x: imageX,
           y: imageY,
-          width: image.width,
-          height: image.height,
+          width: image.width * scaleFactor,
+          height: image.height * scaleFactor,
           seed: 1,
           groupIds: [],
           status: 'pending',
@@ -537,7 +847,7 @@ export const App = forwardRef((props, ref) => {
           link: null,
           locked: true,
           roundness: null,
-          scale: [scaleFactor, scaleFactor],
+          scale: [1, 1],
           updated: Date.now(),
         };
 
@@ -548,7 +858,8 @@ export const App = forwardRef((props, ref) => {
         setPartValues(oldPartValues);
         setSelectedPart(null);
 
-        const oldPartElements = createPartElements(oldParts, scaleFactor, imageX, imageY, oldPartValues);
+        const oldPartElements = createPartElements(oldParts, scaleFactor, imageX, imageY, image.width, image.height, oldPartValues);
+        storePartSnapshots(oldPartElements);
 
         // Add elements to scene first
         excalidrawAPI.updateScene({
@@ -631,8 +942,8 @@ export const App = forwardRef((props, ref) => {
         angle: 0,
         x: imageX,
         y: imageY,
-        width: image.width,
-        height: image.height,
+        width: image.width * scaleFactor,
+        height: image.height * scaleFactor,
         seed: 1,
         groupIds: [],
         status: 'pending',
@@ -645,7 +956,7 @@ export const App = forwardRef((props, ref) => {
         link: null,
         locked: true,
         roundness: null,
-        scale: [scaleFactor, scaleFactor],
+        scale: [1, 1],
         updated: Date.now(),
       };
   
@@ -655,7 +966,8 @@ export const App = forwardRef((props, ref) => {
       setPartValues({});
       setSelectedPart(null);
 
-      const partElements = createPartElements(parts, scaleFactor, imageX, imageY);
+      const partElements = createPartElements(parts, scaleFactor, imageX, imageY, image.width, image.height);
+      storePartSnapshots(partElements);
 
       // Add elements to scene first
       excalidrawAPI.updateScene({
@@ -791,6 +1103,26 @@ export const App = forwardRef((props, ref) => {
               onClick={() => {excalidrawAPI.toggleSidebar({name: 'treatments'})}}
               >
                 Treatments
+              </Button>}
+              {templateParts.length > 0 && <Button
+                variant="soft"
+                color={partsVisible ? 'primary' : 'neutral'}
+                onClick={() => {
+                  const newVisible = !partsVisible;
+                  setPartsVisible(newVisible);
+                  if (!newVisible) {
+                    setSelectedPart(null);
+                  }
+                  const elements = excalidrawAPI.getSceneElements().map(el => {
+                    if (el.customData?.partType === 'template_part') {
+                      return { ...el, opacity: newVisible ? 100 : 0 };
+                    }
+                    return el;
+                  });
+                  excalidrawAPI.updateScene({ elements });
+                }}
+              >
+                {partsVisible ? 'Hide Areas' : 'Show Areas'}
               </Button>}
             </>
           );

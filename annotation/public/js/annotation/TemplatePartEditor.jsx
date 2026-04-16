@@ -23,6 +23,7 @@ export default function TemplatePartEditor() {
   const elementToPartRef = useRef({});   // excalidraw element id -> part local id
   const partToElementRef = useRef({});   // part local id -> excalidraw element id
   const partsRef = useRef(parts);
+  const imageLayoutRef = useRef(null);   // { x, y, renderedWidth, renderedHeight }
 
   useEffect(() => { partsRef.current = parts; }, [parts]);
 
@@ -40,47 +41,19 @@ export default function TemplatePartEditor() {
     });
 
     frappe.call({
-      method: 'frappe.client.get_list',
-      args: {
-        doctype: 'Annotation Template Part',
-        filters: { template: templateName },
-        fields: ['name', 'part_name', 'shape_json', 'color', 'opacity'],
-        limit_page_length: 0,
-      },
+      method: 'annotation.api.get_template_parts',
+      args: { template: templateName },
       callback(r) {
         const loaded = (r.message || []).map(part => {
-          // Load variables for each part
           const localId = generateId();
           return {
             ...part,
             localId,
             opacity: parseFloat(part.opacity) || 0.2,
-            variables: [],
+            variables: part.variables || [],
           };
         });
-
-        // Fetch variables for each part
-        const promises = loaded.map(part =>
-          new Promise(resolve => {
-            frappe.call({
-              method: 'frappe.client.get_list',
-              args: {
-                doctype: 'Template Part Variable',
-                filters: { parent: part.name },
-                fields: ['variable_name', 'type', 'options'],
-                limit_page_length: 0,
-              },
-              callback(vr) {
-                part.variables = vr.message || [];
-                resolve(part);
-              },
-            });
-          })
-        );
-
-        Promise.all(promises).then(loadedParts => {
-          setParts(loadedParts);
-        });
+        setParts(loaded);
       },
     });
   }, [templateName]);
@@ -123,8 +96,8 @@ export default function TemplatePartEditor() {
         angle: 0,
         x: imageX,
         y: 0,
-        width: image.width,
-        height: image.height,
+        width: image.width * scaleFactor,
+        height: image.height * scaleFactor,
         seed: 1,
         groupIds: [],
         status: 'pending',
@@ -136,8 +109,15 @@ export default function TemplatePartEditor() {
         link: null,
         locked: true,
         roundness: null,
-        scale: [scaleFactor, scaleFactor],
+        scale: [1, 1],
         updated: Date.now(),
+      };
+
+      imageLayoutRef.current = {
+        x: imageX,
+        y: 0,
+        renderedWidth: image.width * scaleFactor,
+        renderedHeight: image.height * scaleFactor,
       };
 
       excalidrawAPI.updateScene({
@@ -168,22 +148,59 @@ export default function TemplatePartEditor() {
     const existingElements = excalidrawAPI.getSceneElements();
     const newElements = [];
 
+    const layout = imageLayoutRef.current;
+    if (!layout) return;
+
     parts.forEach(part => {
       if (!part.shape_json) return;
-      let shapeData;
+      let coords;
       try {
-        shapeData = typeof part.shape_json === 'string' ? JSON.parse(part.shape_json) : part.shape_json;
+        coords = typeof part.shape_json === 'string' ? JSON.parse(part.shape_json) : part.shape_json;
       } catch { return; }
+      if (!Array.isArray(coords) || coords.length < 2) return;
 
-      // shape_json stores Excalidraw element data directly
-      const elementId = shapeData.id || generateId();
+      // Convert relative 0-1 coords to absolute Excalidraw line element
+      const absPoints = coords.map(([rx, ry]) => [
+        rx * layout.renderedWidth + layout.x,
+        ry * layout.renderedHeight + layout.y,
+      ]);
+      const originX = absPoints[0][0];
+      const originY = absPoints[0][1];
+      const relPoints = absPoints.map(([ax, ay]) => [ax - originX, ay - originY]);
+
+      const elementId = generateId();
       const element = {
-        ...shapeData,
+        type: 'line',
+        version: 1,
+        versionNonce: Date.now(),
+        isDeleted: false,
         id: elementId,
+        fillStyle: 'solid',
+        strokeWidth: 2,
+        strokeStyle: 'solid',
+        roughness: 0,
+        opacity: 100,
+        angle: 0,
+        x: originX,
+        y: originY,
+        width: 0,
+        height: 0,
+        seed: Math.floor(Math.random() * 100000),
+        groupIds: [],
+        frameId: null,
+        roundness: { type: 2 },
+        boundElements: null,
+        updated: Date.now(),
+        link: null,
+        locked: false,
+        points: relPoints,
+        lastCommittedPoint: relPoints[relPoints.length - 1],
+        startBinding: null,
+        endBinding: null,
+        startArrowhead: null,
+        endArrowhead: null,
         strokeColor: part.color || '#4dabf7',
         backgroundColor: hexToRgba(part.color || '#4dabf7', part.opacity || 0.2),
-        fillStyle: 'solid',
-        locked: false,
       };
 
       elementToPartRef.current[elementId] = part.localId;
@@ -308,16 +325,35 @@ export default function TemplatePartEditor() {
     setSaving(true);
 
     const elements = excalidrawAPI.getSceneElements();
+    const layout = imageLayoutRef.current;
+    if (!layout) {
+      frappe.msgprint({ title: 'Error', message: 'Template image not loaded yet.', indicator: 'red' });
+      setSaving(false);
+      return;
+    }
 
-    // Build the parts payload
+    // Build the parts payload — convert Excalidraw elements to relative 0-1 coords
     const payload = parts.map(part => {
       const elementId = partToElementRef.current[part.localId];
       const element = elements.find(el => el.id === elementId);
 
+      let shapeJson = part.shape_json;
+      if (element && element.points) {
+        const relativeCoords = element.points.map(([dx, dy]) => {
+          const absX = element.x + dx;
+          const absY = element.y + dy;
+          return [
+            (absX - layout.x) / layout.renderedWidth,
+            (absY - layout.y) / layout.renderedHeight,
+          ];
+        });
+        shapeJson = JSON.stringify(relativeCoords);
+      }
+
       return {
         name: part.name || undefined,
         part_name: part.part_name,
-        shape_json: element ? JSON.stringify(element) : part.shape_json,
+        shape_json: shapeJson,
         color: part.color,
         opacity: part.opacity,
         variables: part.variables.filter(v => v.variable_name),

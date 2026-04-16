@@ -6,3 +6,4 @@
 # Patches added in this section will be executed after doctypes are migrated
 annotation.patches.optimize_annotation_json
 annotation.patches.v1_0.add_template_parts_support
+annotation.patches.v1_0.add_annotation_data_field
