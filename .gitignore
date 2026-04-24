@@ -15,6 +15,3 @@ PRD-*.md
 
 # Lock files
 package-lock.json
-
-# Root package.json (workspace-level)
-/package.json

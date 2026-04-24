@@ -1,0 +1,24 @@
+{
+  "name": "annotation",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.0",
+    "@excalidraw/excalidraw": "^0.17.6",
+    "@mui/icons-material": "^6.4.0",
+    "@mui/joy": "^5.0.0-beta.51",
+    "@mui/material": "^6.4.0",
+    "@tldraw/tldraw": "^2.0.0-alpha.18",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-select": "^5.9.0"
+  }
+}
