@@ -22,5 +22,8 @@ This is a DoWorks Frappe app. Read these before changing anything.
 - Keep `pyproject.toml` valid for Pilot: `[tool.bench.frappe-dependencies]` lists `frappe = ">=16.0.0,<17.0.0"`
   and every Frappe app this app imports (e.g. `erpnext`, `hrms`).
 - Run the app's tests before committing; add tests for new behaviour.
-- Local setup: `python3 ../dev-tools/dev_setup.py`, then `pilot dev start`.
+- Local setup: an existing `bench` (put this app and its Frappe apps on `version-16`:
+  `git fetch && git checkout version-16`, then `bench --site <dev site> migrate`), or Pilot
+  (`python3 ../dev-tools/dev_setup.py`, then `pilot dev start`). Pilot's stricter packaging checks also run on
+  staging before every release.
 <!-- doworks-dev-rules:end -->
