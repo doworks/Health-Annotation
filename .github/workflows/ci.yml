@@ -1,0 +1,25 @@
+# Synced from doworks/dev-tools — edit there, not here.
+# Runs on every pull request to version-16: guard (core apps, built files, site names), code style if configured,
+# and the app's plain unit tests if present. Tests that need a Frappe site run on staging, not here.
+name: checks
+on:
+  pull_request:
+    branches: [version-16]
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Guard
+        run: python3 .github/scripts/guard.py "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}"
+      - name: Code style (ruff, only if pyproject.toml configures it)
+        run: |
+          if grep -q '^\[tool.ruff' pyproject.toml 2>/dev/null; then pip install -q ruff && ruff check .; else echo "no ruff config, skipped"; fi
+      - name: Python syntax
+        run: python3 -m compileall -q -x '/(node_modules|\.git)/' .
