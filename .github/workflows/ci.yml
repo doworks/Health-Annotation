@@ -1,6 +1,6 @@
 # Synced from doworks/dev-tools — edit there, not here.
-# Runs on every pull request to version-16: guard (core apps, built files, site names), code style if configured,
-# and the app's plain unit tests if present. Tests that need a Frappe site run on staging, not here.
+# Runs on every pull request to version-16: guard (core apps, built files, site names, and the v16 packaging Pilot
+# needs), code style if configured, Python syntax. App tests need a Frappe site, so they run on staging, not here.
 name: checks
 on:
   pull_request:

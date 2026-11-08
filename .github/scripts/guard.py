@@ -3,7 +3,8 @@
 
 Usage in CI: python3 .github/scripts/guard.py BASE_SHA HEAD_SHA
 Fails (exit 1) when a change touches frappe/erpnext/hrms code, adds built or vendored files, or hard-codes a
-do-works.net site name in shared code. Prints one line per problem.
+do-works.net site name in shared code, and when the app at HEAD is not installable by Pilot (no
+[tool.bench.frappe-dependencies] with frappe, or DocType fixtures). Prints one line per problem.
 """
 from __future__ import annotations
 
@@ -36,6 +37,40 @@ def problems(changes: list[tuple[str, str, str | None]]) -> list[str]:
     return out
 
 
+def packaging_problems(pyproject: str | None, files: list[str], hooks: str) -> list[str]:
+    """The whole app at HEAD: pyproject.toml text (None if missing), tracked file paths, hooks.py text."""
+    import tomllib  # stdlib from 3.11 (CI runs 3.12); apps' ruff configs target 3.10
+
+    if pyproject is None:
+        out = ["pyproject.toml: missing (Pilot refuses the app)"]
+    else:
+        try:
+            deps = tomllib.loads(pyproject).get("tool", {}).get("bench", {}).get("frappe-dependencies", {})
+        except tomllib.TOMLDecodeError as e:
+            deps = {}
+            out = [f"pyproject.toml: not valid TOML ({e})"]
+        else:
+            out = []
+        if "frappe" not in deps:
+            out.append("pyproject.toml: no [tool.bench.frappe-dependencies] with frappe (Pilot refuses the app)")
+    out += [f"{f}: DocType fixtures (Pilot refuses them; ship DocTypes in the app)"
+            for f in files if f.endswith("/fixtures/doctype.json")]
+    if re.search(r"""["']dt["']\s*:\s*["']DocType["']""", hooks):
+        out.append('hooks.py: fixtures export "DocType" records (Pilot refuses them)')
+    return out
+
+
+def _at_head(head: str, path: str) -> str | None:
+    r = subprocess.run(["git", "show", f"{head}:{path}"], capture_output=True, text=True, errors="ignore")
+    return r.stdout if r.returncode == 0 else None
+
+
+def _packaging(head: str) -> list[str]:
+    files = subprocess.run(["git", "ls-tree", "-r", "--name-only", head], capture_output=True, text=True, check=True).stdout.split()
+    hooks = "".join(_at_head(head, f) or "" for f in files if re.fullmatch(r"[^/]+/hooks\.py", f))
+    return packaging_problems(_at_head(head, "pyproject.toml"), files, hooks)
+
+
 def _changes(base: str, head: str) -> list[tuple[str, str, str | None]]:
     diff = subprocess.run(["git", "diff", "--name-status", "-M", f"{base}...{head}"],
                           capture_output=True, text=True, check=True).stdout
@@ -53,7 +88,7 @@ def _changes(base: str, head: str) -> list[tuple[str, str, str | None]]:
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    found = problems(_changes(argv[0], argv[1]))
+    found = problems(_changes(argv[0], argv[1])) + _packaging(argv[1])
     for p in found:
         print(p)
     if not found:
