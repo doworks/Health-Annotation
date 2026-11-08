@@ -11,7 +11,6 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
-import tomllib
 
 CORE = re.compile(r"^(frappe|erpnext|hrms)/")
 BUILT = re.compile(r"(^|/)(node_modules|dist)/|\.bundle\.[0-9a-f]*\.?(js|css)$|\.pyc$")
@@ -40,6 +39,8 @@ def problems(changes: list[tuple[str, str, str | None]]) -> list[str]:
 
 def packaging_problems(pyproject: str | None, files: list[str], hooks: str) -> list[str]:
     """The whole app at HEAD: pyproject.toml text (None if missing), tracked file paths, hooks.py text."""
+    import tomllib  # stdlib from 3.11 (CI runs 3.12); apps' ruff configs target 3.10
+
     if pyproject is None:
         out = ["pyproject.toml: missing (Pilot refuses the app)"]
     else:
